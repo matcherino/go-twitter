@@ -2,6 +2,8 @@ package twitter
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/dghubble/sling"
 )
@@ -97,6 +99,15 @@ type FriendshipDestroyParams struct {
 	UserID     int64  `url:"user_id,omitempty"`
 }
 
+// FriendRelationship represents the follow relationship between a logged in user and a specific users
+type FriendRelationship struct {
+	Name        string   `json:"name"`
+	ScreenName  string   `json:"screen_name"`
+	ID          int64    `json:"id"`
+	IDStr       string   `json:"id_str"`
+	Connections []string `json:"connections"`
+}
+
 // Destroy destroys a friendship to (i.e. unfollows) the specified user and
 // returns the unfollowed user.
 // Requires a user auth context.
@@ -131,4 +142,60 @@ func (s *FriendshipService) Incoming(params *FriendshipPendingParams) (*FriendID
 	apiError := new(APIError)
 	resp, err := s.sling.New().Get("incoming.json").QueryStruct(params).Receive(ids, apiError)
 	return ids, resp, relevantError(err, *apiError)
+}
+
+// FriendshipLookupParams are the parameters for FriendshipService.Lookup
+type FriendshipLookupParams struct {
+	UserIDList     []int64
+	UserIDStr      string `url:"user_id,omitempty"`
+	UserID         int64
+	ScreenNameList []string
+	ScreenNameStr  string `url:"screen_name,omitempty"`
+}
+
+// Lookup returns a set of friendship status information between the specified user and a list of users.
+// https://developer.twitter.com/en/docs/accounts-and-users/follow-search-get-users/api-reference/get-friendships-lookup
+func (s *FriendshipService) Lookup(params *FriendshipLookupParams) ([]FriendRelationship, *http.Response, error) {
+	relationships := new([]FriendRelationship)
+	transformedParams := new(FriendshipLookupParams)
+	apiError := new(APIError)
+
+	// Transform params into a comma separated pair of strings
+	transformedParams.ScreenNameStr = strings.Join(params.ScreenNameList, ",")
+	if len(transformedParams.ScreenNameStr) > 0 {
+		transformedParams.ScreenNameStr += ","
+	}
+	transformedParams.ScreenNameStr += params.ScreenNameStr
+
+	transformedParams.UserIDStr = params.UserIDStr
+	if params.UserID > 0 {
+		if len(transformedParams.UserIDStr) > 0 {
+			transformedParams.UserIDStr += ","
+		}
+		transformedParams.UserIDStr += strconv.FormatInt(params.UserID, 10)
+	}
+	for _, id := range params.UserIDList {
+		if len(transformedParams.UserIDStr) > 0 {
+			transformedParams.UserIDStr += ","
+		}
+		transformedParams.UserIDStr += strconv.FormatInt(id, 10)
+	}
+	users := strings.Count(transformedParams.UserIDStr, ",")
+	names := strings.Count(transformedParams.ScreenNameStr, ",")
+	if users > 0 {
+		users++
+	}
+	if names > 0 {
+		names++
+	}
+	if names+users > 100 {
+		return nil, nil, APIError{
+			Errors: []ErrorDetail{
+				ErrorDetail{Message: "This API only supports up to 100 users", Code: 200},
+			},
+		}
+	}
+
+	resp, err := s.sling.New().Get("lookup.json").QueryStruct(transformedParams).Receive(relationships, apiError)
+	return *relationships, resp, relevantError(err, *apiError)
 }
